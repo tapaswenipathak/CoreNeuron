@@ -374,7 +374,7 @@ using namespace coreneuron;
 
 extern "C" int mk_mech_init(int argc, char** argv) {
     // read command line parameters and parameter config files
-    //nrnopt_parse(argc, (const char**)argv);
+    // nrnopt_parse(argc, (const char**)argv);
 
     CLI::App app{"CoreNeuron - Your friendly neuron simulator."};
 
