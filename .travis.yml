@@ -1,0 +1,46 @@
+language: cpp
+matrix:
+  include:
+    - os: linux
+      dist: trusty
+    - os: osx
+      osx_image: xcode10.14
+compiler:
+  - gcc
+  - clang
+sudo: required
+dist: trusty
+
+env:
+  global:
+    - NUM_CPU="`grep processor /proc/cpuinfo | wc -l`"; echo $NUM_CPU
+    - BUILD_SYSTEM="`uname -s`"
+    - BUILD_PROCESSOR="`uname -p`"
+    - DEPS_INSTALL_DIR=${TRAVIS_BUILD_DIR}/install-deps
+    - INSTALL_DIR=${TRAVIS_BUILD_DIR}/install
+addons:
+  apt:
+    sources:
+      -  ubuntu-toolchain-r-test
+before_install:
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get install cmake flex bison mpi gcc python; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get update -qq; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get install build-essential; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get install cmake; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get install libtool; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then sudo apt-get install pkg-config; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then brew update; fi
+  - if [[ "$TRAVIS_OS_NAME" == "osx" ]]; then brew install cmake ; fi
+  - cmake $SOURCE_DIR -DCMAKE_INSTALL_PREFIX=$INSTALL_DIR/ -DCORENEURON_OPENMP=OFF -DUNIT_TESTS=OFF -DCOMPILE_LIBRARY_TYPE=SHARED -DUNIT_TESTS=OFF
+install:
+  - if [ "$CXX" = "g++" ]; then sudo apt-get install -qq g++-4.8; fi
+  - if [ "$CXX" = "g++" ]; then export CXX="g++-4.8"; fi
+  - sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4.8 90
+
+script:
+  - export CXX=g++-4.8
+  - cmake --version
+  - cmake CMakeLists.txt
+  - make
+  - make test
