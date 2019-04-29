@@ -40,7 +40,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 namespace coreneuron {
 int secondorder = 0;
 double t, dt, celsius;
-#if defined(PG_ACC_BUGS)
+#if defined(CORENEURON_PG_ACC_BUGS)
 // clang-format off
     #pragma acc declare copyin(secondorder)
     #pragma acc declare copyin(celsius)

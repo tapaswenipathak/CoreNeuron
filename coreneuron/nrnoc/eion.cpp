@@ -33,18 +33,18 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include "coreneuron/nrnoc/nrnoc_decl.h"
 #include "coreneuron/nrnmpi/nrnmpi.h"
 #include "coreneuron/nrnoc/membfunc.h"
-#if !defined(LAYOUT)
+#if !defined(CORENEURON_LAYOUT)
 /* 1 means AoS, >1 means AoSoA, <= 0 means SOA */
-#define LAYOUT 1
+#define CORENEURON_LAYOUT 1
 #endif
-#if LAYOUT >= 1
-#define _STRIDE LAYOUT
+#if CORENEURON_LAYOUT >= 1
+#define _STRIDE CORENEURON_LAYOUT
 #else
 #define _STRIDE _cntml_padded + _iml
 #endif
 
 #if defined(_OPENACC)
-#if defined(PG_ACC_BUGS)
+#if defined(CORENEURON_PG_ACC_BUGS)
 #define _PRAGMA_FOR_INIT_ACC_LOOP_ \
     _Pragma(                       \
         "acc parallel loop present(pd[0:_cntml_padded*5], ppd[0:1], nrn_ion_global_map[0:nrn_ion_global_map_size][0:3]) if(nt->compute_gpu)")
@@ -132,7 +132,7 @@ void ion_reg(const char* name, double valence) {
         register_mech((const char**)mechanism, nrn_alloc_ion, nrn_cur_ion, (mod_f_t)0, (mod_f_t)0,
                       (mod_f_t)nrn_init_ion, -1, 1);
         mechtype = nrn_get_mechtype(mechanism[1]);
-        _nrn_layout_reg(mechtype, LAYOUT);
+        _nrn_layout_reg(mechtype, CORENEURON_LAYOUT);
         hoc_register_prop_size(mechtype, nparm, 1);
         hoc_register_dparam_semantics(mechtype, 0, "iontype");
         nrn_writes_conc(mechtype, 1);
@@ -211,7 +211,7 @@ void nrn_wrote_conc(int type,
     }
 #endif
     if (it & 04) {
-#if LAYOUT <= 0 /* SoA */
+#if CORENEURON_LAYOUT <= 0 /* SoA */
         int _iml = 0;
 /* passing _nt to this function causes cray compiler to segfault during compilation
  * hence passing _cntml_padded
@@ -293,17 +293,17 @@ void nrn_cur_ion(NrnThread* nt, Memb_list* ml, int type) {
     int stream_id = nt->stream_id;
 #endif
 /*printf("ion_cur %s\n", memb_func[type].sym->name);*/
-#if LAYOUT == 1 /*AoS*/
+#if CORENEURON_LAYOUT == 1 /*AoS*/
     for (_iml = 0; _iml < _cntml_actual; ++_iml) {
         pd = ml->data + _iml * nparm;
         ppd = ml->pdata + _iml * 1;
-#elif LAYOUT == 0         /*SoA*/
+#elif CORENEURON_LAYOUT == 0         /*SoA*/
     int _cntml_padded = ml->_nodecount_padded;
     pd = ml->data;
     ppd = ml->pdata;
     _PRAGMA_FOR_CUR_ACC_LOOP_
     for (_iml = 0; _iml < _cntml_actual; ++_iml) {
-#else /* if LAYOUT > 1 */ /*AoSoA*/
+#else /* if CORENEURON_LAYOUT > 1 */ /*AoSoA*/
 #error AoSoA not implemented.
 #endif
         dcurdv = 0.;
@@ -330,17 +330,17 @@ void nrn_init_ion(NrnThread* nt, Memb_list* ml, int type) {
     }
 
 /*printf("ion_init %s\n", memb_func[type].sym->name);*/
-#if LAYOUT == 1 /*AoS*/
+#if CORENEURON_LAYOUT == 1 /*AoS*/
     for (_iml = 0; _iml < _cntml_actual; ++_iml) {
         pd = ml->data + _iml * nparm;
         ppd = ml->pdata + _iml * 1;
-#elif LAYOUT == 0         /*SoA*/
+#elif CORENEURON_LAYOUT == 0         /*SoA*/
     int _cntml_padded = ml->_nodecount_padded;
     pd = ml->data;
     ppd = ml->pdata;
     _PRAGMA_FOR_INIT_ACC_LOOP_
     for (_iml = 0; _iml < _cntml_actual; ++_iml) {
-#else /* if LAYOUT > 1 */ /*AoSoA*/
+#else /* if CORENEURON_LAYOUT > 1 */ /*AoSoA*/
 #error AoSoA not implemented.
 #endif
         if (iontype & 04) {
@@ -361,7 +361,7 @@ void second_order_cur(NrnThread* _nt, int secondorder) {
     NrnThreadMembList* tml;
     Memb_list* ml;
     int _iml, _cntml_actual;
-#if LAYOUT == 0
+#if CORENEURON_LAYOUT == 0
     int _cntml_padded;
 #endif
     int* ni;
@@ -378,15 +378,15 @@ void second_order_cur(NrnThread* _nt, int secondorder) {
                 ml = tml->ml;
                 _cntml_actual = ml->nodecount;
                 ni = ml->nodeindices;
-#if LAYOUT == 1 /*AoS*/
+#if CORENEURON_LAYOUT == 1 /*AoS*/
                 for (_iml = 0; _iml < _cntml_actual; ++_iml) {
                     pd = ml->data + _iml * nparm;
-#elif LAYOUT == 0         /*SoA*/
+#elif CORENEURON_LAYOUT == 0         /*SoA*/
                 _cntml_padded = ml->_nodecount_padded;
                 pd = ml->data;
                 _PRAGMA_FOR_SEC_ORDER_CUR_ACC_LOOP_
                 for (_iml = 0; _iml < _cntml_actual; ++_iml) {
-#else /* if LAYOUT > 1 */ /*AoSoA*/
+#else /* if CORENEURON_LAYOUT > 1 */ /*AoSoA*/
 #error AoSoA not implemented.
 #endif
                     cur += dcurdv * (_vec_rhs[ni[_iml]]);

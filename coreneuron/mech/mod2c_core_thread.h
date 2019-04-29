@@ -6,12 +6,12 @@
 
 namespace coreneuron {
 
-#if !defined(LAYOUT)
+#if !defined(CORENEURON_LAYOUT)
 /* 1 means AoS, >1 means AoSoA, <= 0 means SOA */
-#define LAYOUT 1
+#define CORENEURON_LAYOUT 1
 #endif
-#if LAYOUT >= 1
-#define _STRIDE LAYOUT
+#if CORENEURON_LAYOUT >= 1
+#define _STRIDE CORENEURON_LAYOUT
 #else
 #define _STRIDE _cntml_padded + _iml
 #endif

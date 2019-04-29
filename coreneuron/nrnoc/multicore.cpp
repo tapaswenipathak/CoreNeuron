@@ -217,7 +217,7 @@ void nrn_multithread_job(void* (*job)(NrnThread*)) {
  *        Opari2 parsing errors.
  */
 // clang-format off
-#if defined(ENABLE_OMP_RUNTIME_SCHEDULE)
+#if defined(CORENEURON_ENABLE_OMP_RUNTIME_SCHEDULE)
     #pragma omp parallel for private(i) shared(nrn_threads, job, nrn_nthread, \
                                            nrnmpi_myid) schedule(runtime)
     for (i = 0; i < nrn_nthread; ++i) {

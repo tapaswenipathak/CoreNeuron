@@ -64,7 +64,7 @@ const char* corenrn_version() {
     return coreneuron::bbcore_write_version;
 }
 
-#ifdef ISPC_INTEROP
+#ifdef CORENEURON_ISPC_INTEROP
 // cf. utils/ispc_globals.c
 extern double ispc_celsius;
 #endif
@@ -227,7 +227,7 @@ void nrn_init_and_load_data(int argc,
     }
     nrnopt_modify_dbl("--celsius", celsius);
 
-#ifdef ISPC_INTEROP
+#ifdef CORENEURON_ISPC_INTEROP
     ispc_celsius = celsius;
 #endif
     // create net_cvode instance
@@ -245,7 +245,7 @@ void nrn_init_and_load_data(int argc,
     cellorder_nwarp = nrnopt_get_int("--nwarp");
     use_solve_interleave = nrnopt_get_int("--cell-permute");
 
-#if LAYOUT == 1
+#if CORENEURON_LAYOUT == 1
     // permuting not allowed for AoS
     use_interleave_permute = 0;
     use_solve_interleave = 0;

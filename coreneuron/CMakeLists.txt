@@ -224,7 +224,7 @@ endmacro()
 set(STDMODLIBPATH "${CMAKE_CURRENT_SOURCE_DIR}/mech/modfile")
 set(MECH_STDMODS expsyn.mod exp2syn.mod  hh.mod  netstim.mod  passive.mod  pattern.mod stim.mod)
 
-if (EXPORT_MECHS_FUNCTIONS)
+if (CORENEURON_EXPORT_MECHS_FUNCTIONS)
   # Add 6 standard mechanisms to MOD_PATHS
   foreach(MOD ${MECH_STDMODS})
       list(APPEND MOD_PATHS "${STDMODLIBPATH}/${MOD}")
@@ -288,7 +288,7 @@ add_custom_command(OUTPUT "${KINDERIV_H}"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 add_custom_target(kinderiv DEPENDS "${KINDERIV_H}")
 
-if (EXPORT_MECHS_FUNCTIONS)
+if (CORENEURON_EXPORT_MECHS_FUNCTIONS)
   # Create C file with all "get function pointers" methods
   set(MOD_FUNC_PTRS_C    "${CMAKE_CURRENT_BINARY_DIR}/mod_func_ptrs.cpp")
   set(MOD_FUNC_PTRS_C_PL "${CMAKE_CURRENT_SOURCE_DIR}/mech/mod_func_ptrs.c.pl")

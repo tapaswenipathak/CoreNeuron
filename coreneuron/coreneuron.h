@@ -48,7 +48,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace coreneuron {
 
-#ifdef EXPORT_MECHS_FUNCTIONS
+#ifdef CORENEURON_EXPORT_MECHS_FUNCTIONS
 // from (auto-generated) mod_func_ptrs.c
 extern mod_f_t get_init_function(const char* sym);
 extern mod_f_t get_cur_function(const char* sym);

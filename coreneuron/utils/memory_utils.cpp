@@ -51,7 +51,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include <spi/include/kernel/memory.h>
 #elif defined(__APPLE__) && defined(__MACH__)
 #include <mach/mach.h>
-#elif defined HAVE_MALLOC_H
+#elif defined CORENEURON_HAVE_MALLOC_H
 #include <malloc.h>
 #endif
 
@@ -83,7 +83,7 @@ double nrn_mallinfo(void) {
         file.close();
         mbs = (data_size * sysconf(_SC_PAGESIZE)) / (1024.0 * 1024.0);
     } else {
-#if defined HAVE_MALLOC_H
+#if defined CORENEURON_HAVE_MALLOC_H
         struct mallinfo m;
         m = mallinfo();
         mbs = (m.hblkhd + m.uordblks) / (1024.0 * 1024.0);

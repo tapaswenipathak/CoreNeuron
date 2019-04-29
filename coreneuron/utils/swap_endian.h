@@ -40,7 +40,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include <cassert>
 #endif
 
-#if !defined(SWAP_ENDIAN_DISABLE_ASM) && (defined(__AVX2__) || defined(__SSSE3__))
+#if !defined(CORENEURON_SWAP_ENDIAN_DISABLE_ASM) && (defined(__AVX2__) || defined(__SSSE3__))
 #include <immintrin.h>
 #endif
 
@@ -197,7 +197,7 @@ namespace endian {
             }
         };
 
-#if !defined(SWAP_ENDIAN_DISABLE_ASM) && defined(__PPC64__)
+#if !defined(CORENEURON_SWAP_ENDIAN_DISABLE_ASM) && defined(__PPC64__)
         /* generic methods very slow on bgq */
 
         template <bool Aligned>
@@ -293,7 +293,7 @@ namespace endian {
 #endif
 #endif
 
-#if !defined(SWAP_ENDIAN_DISABLE_ASM) && defined(__SSSE3__)
+#if !defined(CORENEURON_SWAP_ENDIAN_DISABLE_ASM) && defined(__SSSE3__)
         template <>
         struct swap_endian_fast<2, 8, true> {
             static void eval(unsigned char* d) {
@@ -328,7 +328,7 @@ namespace endian {
         };
 #endif
 
-#if !defined(SWAP_ENDIAN_DISABLE_ASM) && defined(__AVX2__)
+#if !defined(CORENEURON_SWAP_ENDIAN_DISABLE_ASM) && defined(__AVX2__)
         // Modern implementations suffer little or no penalty from unaligned load.
         template <bool Aligned>
         struct swap_endian_fast<4, 8, Aligned> {

@@ -31,7 +31,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "coreneuron/nrnconf.h"
 namespace coreneuron {
-#if PG_ACC_BUGS
+#if CORENEURON_PG_ACC_BUGS
 struct ThreadDatum {
     int i;
     double* pval;

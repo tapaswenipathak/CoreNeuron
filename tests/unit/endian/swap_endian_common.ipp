@@ -28,9 +28,9 @@ THE POSSIBILITY OF SUCH DAMAGE.
 
 
 /* Wish to run unit tests for swap_endian code under multiple configurations:
- * 1. default: SWAP_ENDIAN_DISABLE_ASM and SWAP_ENDIAN_MAX_UNROLL are undef.
- * 2. using fallback methods, with SWAP_ENDIAN_DISABLE_ASM defined.
- * 3. using a strange unroll factor, with SWAP_ENDIAN_DISABLE_ASM set to 7.
+ * 1. default: CORENEURON_SWAP_ENDIAN_DISABLE_ASM and SWAP_ENDIAN_MAX_UNROLL are undef.
+ * 2. using fallback methods, with CORENEURON_SWAP_ENDIAN_DISABLE_ASM defined.
+ * 3. using a strange unroll factor, with CORENEURON_SWAP_ENDIAN_DISABLE_ASM set to 7.
  *
  * This file presents the common code for testing, to be included in
  * the specific test code for each of the above scenarios.

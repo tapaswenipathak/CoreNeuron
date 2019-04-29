@@ -231,11 +231,11 @@ static int maxgid;
 // If MATRIX_LAYOUT is 1 then a,b,d,rhs,v,area is not padded using NRN_SOA_PAD
 // When MATRIX_LAYOUT is 0 then mechanism pdata index values into _actual_v
 // and _actual_area data need to be updated.
-#if !defined(LAYOUT)
-#define LAYOUT 1
+#if !defined(CORENEURON_LAYOUT)
+#define CORENEURON_LAYOUT 1
 #define MATRIX_LAYOUT 1
 #else
-#define MATRIX_LAYOUT LAYOUT
+#define MATRIX_LAYOUT CORENEURON_LAYOUT
 #endif
 
 #if !defined(NRN_SOA_PAD)
@@ -859,7 +859,7 @@ int nrn_soa_padded_size(int cnt, int layout) {
 }
 
 static size_t nrn_soa_byte_align(size_t i) {
-    if (LAYOUT == 0) {
+    if (CORENEURON_LAYOUT == 0) {
         size_t dbl_align = NRN_SOA_BYTE_ALIGN / sizeof(double);
         size_t rem = i % dbl_align;
         if (rem) {

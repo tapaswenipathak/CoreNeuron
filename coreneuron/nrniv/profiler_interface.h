@@ -7,7 +7,7 @@
 #include <caliper/cali.h>
 #endif
 
-#if defined(CUDA_PROFILING)
+#if defined(CORENEURON_CUDA_PROFILING)
 #include <cuda_profiler_api.h>
 #endif
 
@@ -57,7 +57,7 @@ struct Caliper {
 
 #endif
 
-#if defined(CUDA_PROFILING)
+#if defined(CORENEURON_CUDA_PROFILING)
 
 struct CudaProfiling {
     inline static void phase_begin(const char* name){};
@@ -123,7 +123,7 @@ using Instrumentor = detail::Instrumentor<
 #if defined CORENEURON_CALIPER
     detail::Caliper,
 #endif
-#if defined(CUDA_PROFILING)
+#if defined(CORENEURON_CUDA_PROFILING)
     detail::CudaProfiling,
 #endif
 #if defined(CRAYPAT)
