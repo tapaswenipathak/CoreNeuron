@@ -518,8 +518,8 @@ void splay(SPBLK* n, SPTREE* q) {
 #ifdef DEBUG
     if (q->root != prev) {
         /*	fprintf(stderr, " *** bug in splay: n not in q *** " ); */
-        abort();
-    }
+        ML_LOG(FATAL, "fatal error");
+		}
 #endif
 
     n->leftlink = left;

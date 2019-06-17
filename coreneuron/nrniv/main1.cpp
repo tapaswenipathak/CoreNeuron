@@ -56,6 +56,8 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include "coreneuron/nrniv/multisend.h"
 #include "coreneuron/utils/file_utils.h"
 #include "coreneuron/nrniv/nrn2core_direct.h"
+#include "coreneuron/config.hpp"
+#include "coreneuron/logging.hpp"
 #include <string.h>
 #include <climits>
 
@@ -437,9 +439,7 @@ extern "C" int run_solve_core(int argc, char** argv) {
         double tstop = nrnopt_get_dbl("--tstop");
 
         if (tstop < t && nrnmpi_myid == 0) {
-            printf("Error: Stop time (%lf) < Start time (%lf), restoring from checkpoint? \n",
-                   tstop, t);
-            abort();
+            ML_LOG(ERROR, "Error: Stop time" << tstop << "Start time" << "restoring from checkpoint? \n";
         }
 
         // register all reports into reportinglib

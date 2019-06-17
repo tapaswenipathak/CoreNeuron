@@ -388,11 +388,10 @@ void setup_nrnthreads_on_device(NrnThread* threads, int nthreads) {
                 d_ptr = (int*)acc_copyin(info->cellsize, sizeof(int) * info->nwarp);
                 acc_memcpy_to_device(&(d_info->cellsize), &d_ptr, sizeof(int*));
             } else {
-                printf("\n ERROR: only --cell_permute = [12] implemented");
-                abort();
+                ML_LOG(ERROR, "\n ERROR: only --cell_permute = [12] implemented");
             }
         } else {
-            printf("\n WARNING: NrnThread %d not permuted, error for linear algebra?", i);
+            ML_LOG(INFO, "\n WARNING: NrnThread %d not permuted, error for linear algebra?", i);
         }
     }
 

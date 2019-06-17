@@ -198,7 +198,7 @@ void nrn_abort(int errcode) {
     } else
 #endif
     {
-        abort();
+			ML_LOG(FATAL, "fatal error");
     }
 }
 
