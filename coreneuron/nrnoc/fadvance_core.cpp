@@ -30,11 +30,13 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include "coreneuron/nrnconf.h"
 #include "coreneuron/nrnoc/multicore.h"
 #include "coreneuron/nrnmpi/nrnmpi.h"
+#include "coreneuron/nrnoc/fast_imem.h"
 #include "coreneuron/nrnoc/nrnoc_decl.h"
 #include "coreneuron/nrniv/nrn_acc_manager.h"
 #include "coreneuron/utils/reports/nrnreport.h"
 #include "coreneuron/utils/progressbar/progressbar.h"
 #include "coreneuron/nrniv/profiler_interface.h"
+#include "coreneuron/nrniv/nrn2core_direct.h"
 
 namespace coreneuron {
 
@@ -189,15 +191,16 @@ void update(NrnThread* _nt) {
         assert(_nt->tml->index == CAP);
         nrn_cur_capacitance(_nt, _nt->tml->ml, _nt->tml->index);
     }
+    if (nrn_use_fast_imem) { 
+        nrn_calc_fast_imem(_nt);
+    }
 }
-
 
 void nonvint(NrnThread* _nt) {
     NrnThreadMembList* tml;
     if (nrn_have_gaps) {
-        Instrumentor::phase_begin("gap-v-transfer");
+        Instrumentor::phase p("gap-v-transfer");
         nrnthread_v_transfer(_nt);
-        Instrumentor::phase_end("gap-v-transfer");
     }
     errno = 0;
 
@@ -207,9 +210,10 @@ void nonvint(NrnThread* _nt) {
             mod_f_t s = memb_func[tml->index].state;
             std::string ss("state-");
             ss += nrn_get_mechname(tml->index);
-            Instrumentor::phase_begin(ss.c_str());
-            (*s)(_nt, tml->ml, tml->index);
-            Instrumentor::phase_end(ss.c_str());
+            {
+                Instrumentor::phase p(ss.c_str());
+                (*s)(_nt, tml->ml, tml->index);
+            }
 #ifdef DEBUG
             if (errno) {
                 hoc_warning("errno set during calculation of states", (char*)0);
@@ -229,14 +233,57 @@ void nrn_ba(NrnThread* nt, int bat) {
     }
 }
 
+void nrncore2nrn_send_init() {
+    if (nrn2core_trajectory_values_ == nullptr) {
+        // standalone execution : no callbacks
+        return;
+    }
+    // if per time step transfer, need to call nrn_record_init() in NEURON.
+    // if storing full trajectories in CoreNEURON, need to initialize
+    // vsize for all the trajectory requests.
+    (*nrn2core_trajectory_values_)(-1, 0, NULL, 0.0);
+    for (int tid = 0; tid < nrn_nthread; ++tid) {
+        NrnThread& nt = nrn_threads[tid];
+        if (nt.trajec_requests) {
+            nt.trajec_requests->vsize = 0;
+        }
+    }
+}
+
+void nrncore2nrn_send_values(NrnThread* nth) {
+    if (nrn2core_trajectory_values_ == nullptr) {
+        // standalone execution : no callbacks
+        return;
+    }
+
+    TrajectoryRequests* tr = nth->trajec_requests;
+    if (tr) {
+        if (tr->varrays) {  // full trajectories into Vector data
+            double** va = tr->varrays;
+            int vs = tr->vsize++;
+            assert(vs < tr->bsize);
+            for (int i = 0; i < tr->n_trajec; ++i) {
+                va[i][vs] = *(tr->gather[i]);
+            }
+        } else if (tr->scatter) {  // scatter to NEURON and notify each step.
+            nrn_assert(nrn2core_trajectory_values_);
+            for (int i = 0; i < tr->n_trajec; ++i) {
+                *(tr->scatter[i]) = *(tr->gather[i]);
+            }
+            (*nrn2core_trajectory_values_)(nth->id, tr->n_pr, tr->vpr, nth->_t);
+        }
+    }
+}
+
 static void* nrn_fixed_step_thread(NrnThread* nth) {
     /* check thresholds and deliver all (including binqueue)
        events up to t+dt/2 */
     Instrumentor::phase_begin("timestep");
 
-    Instrumentor::phase_begin("deliver_events");
-    deliver_net_events(nth);
-    Instrumentor::phase_end("deliver_events");
+    {
+        Instrumentor::phase p("deliver_events");
+        deliver_net_events(nth);
+    }
 
     nth->_t += .5 * nth->_dt;
 
@@ -251,21 +298,25 @@ static void* nrn_fixed_step_thread(NrnThread* nth) {
 #endif
         fixed_play_continuous(nth);
 
-        Instrumentor::phase_begin("setup_tree_matrix");
-        setup_tree_matrix_minimal(nth);
-        Instrumentor::phase_end("setup_tree_matrix");
+        {
+            Instrumentor::phase p("setup_tree_matrix");
+            setup_tree_matrix_minimal(nth);
+        }
 
-        Instrumentor::phase_begin("matrix-solver");
-        nrn_solve_minimal(nth);
-        Instrumentor::phase_end("matrix-solver");
+        {
+            Instrumentor::phase p("matrix-solver");
+            nrn_solve_minimal(nth);
+        }
 
-        Instrumentor::phase_begin("second_order_cur");
-        second_order_cur(nth, secondorder);
-        Instrumentor::phase_end("second_order_cur");
+        {
+            Instrumentor::phase p("second_order_cur");
+            second_order_cur(nth, secondorder);
+        }
 
-        Instrumentor::phase_begin("update");
-        update(nth);
-        Instrumentor::phase_end("update");
+        {
+            Instrumentor::phase p("update");
+            update(nth);
+        }
     }
     if (!nrn_have_gaps) {
         nrn_fixed_step_lastpart(nth);
@@ -289,13 +340,18 @@ void* nrn_fixed_step_lastpart(NrnThread* nth) {
 
         fixed_play_continuous(nth);
         nonvint(nth);
+        nrncore2nrn_send_values(nth);
         nrn_ba(nth, AFTER_SOLVE);
         nrn_ba(nth, BEFORE_STEP);
+    } else {
+        nrncore2nrn_send_values(nth);
     }
 
-    Instrumentor::phase_begin("deliver_events");
-    nrn_deliver_events(nth); /* up to but not past texit */
-    Instrumentor::phase_end("deliver_events");
+    {
+        Instrumentor::phase p("deliver_events");
+        nrn_deliver_events(nth); /* up to but not past texit */
+    }
+
     return (void*)0;
 }
 }  // namespace coreneuron

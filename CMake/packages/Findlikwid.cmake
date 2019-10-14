@@ -25,17 +25,34 @@
 # THE POSSIBILITY OF SUCH DAMAGE.
 
 
+# Findlikwid
+# -------------
+#
+# Find likwid
+#
+# Find the likwid RRZE Performance Monitoring and Benchmarking Suite
+#
+# Using likwid:
+#
+# ::
+#   set(LIKWID_ROOT "" CACHE PATH "Path likwid performance monitoring and benchmarking suite")
+#   find_package(likwid REQUIRED)
+#   include_directories(${likwid_INCLUDE_DIRS})
+#   target_link_libraries(foo ${likwid_LIBRARIES})
+#
+# This module sets the following variables:
+#
+# ::
+#
+#   likwid_FOUND     - set to true if the library is found
+#   likwid_INCLUDE   - list of required include directories
+#   likwid_LIBRARIES - list of required library directories
 
-include_directories(${CMAKE_SOURCE_DIR}/coreneuron ${Boost_INCLUDE_DIRS})
-FILE(GLOB alignment_test_src "*.cpp")
+find_path(likwid_INCLUDE_DIRS "likwid.h" HINTS "${LIKWID_ROOT}/include")
+find_library(likwid_LIBRARIES likwid HINTS "${LIKWID_ROOT}/lib")
 
-add_executable(alignment_test_bin ${alignment_test_src})
-target_link_libraries(alignment_test_bin ${Boost_UNIT_TEST_FRAMEWORK_LIBRARY})
+# Checks 'REQUIRED', 'QUIET' and versions.
+include(FindPackageHandleStandardArgs)
 
-if(ENABLE_OPENACC AND ENABLE_CUDA_MODULES)
-    target_link_libraries(alignment_test_bin ${link_cudacoreneuron} ${CUDA_LIBRARIES})
-endif()
-
-add_test(NAME alignment_test COMMAND ${TEST_EXEC_PREFIX} ${CMAKE_CURRENT_BINARY_DIR}/alignment_test_bin)
-
-
+find_package_handle_standard_args(likwid
+    REQUIRED_VARS likwid_INCLUDE_DIRS likwid_LIBRARIES)

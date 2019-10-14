@@ -59,6 +59,22 @@ struct NrnThreadBAList {
     NrnThreadBAList* next;
 };
 
+struct NrnFastImem {
+    double* nrn_sav_rhs;
+    double* nrn_sav_d;
+};
+
+struct TrajectoryRequests {
+    void** vpr;       /* PlayRecord Objects known by NEURON */
+    double** scatter; /* if bsize == 0, each time step */
+    double** varrays; /* if bsize > 0, the Vector data pointers. */
+    double** gather;  /* pointers to values that get scattered to NEURON */
+    int n_pr;         /* number of PlayRecord instances */
+    int n_trajec;     /* number of trajectories requested */
+    int bsize;        /* buffer size of the Vector data */
+    int vsize;        /* number of elements in varrays so far */
+};
+
 /* for OpenACC, in order to avoid an error while update PreSyn, with virtual base
  * class, we are adding helper with flag variable which could be updated on GPU
  */
@@ -105,6 +121,10 @@ struct NrnThread {
                              compartment */
     double* _shadow_d;    /* Not pointer into _data. Avoid race for multiple POINT_PROCESS in same
                              compartment */
+
+    /* Fast membrane current calculation struct */
+    NrnFastImem* nrn_fast_imem;
+
     int* _v_parent_index;
     int* _permute;
     char* _sp13mat;              /* handle to general sparse matrix */
@@ -121,8 +141,9 @@ struct NrnThread {
     int _net_send_buffer_cnt;
     int* _net_send_buffer;
 
-    int* _watch_types; /* NULL or 0 terminated array of integers */
-    void* mapping;     /* section to segment mapping information */
+    int* _watch_types;                   /* NULL or 0 terminated array of integers */
+    void* mapping;                       /* section to segment mapping information */
+    TrajectoryRequests* trajec_requests; /* per time step values returned to NEURON */
 };
 
 extern void nrn_threads_create(int n);

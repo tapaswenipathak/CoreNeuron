@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2016, Blue Brain Project
+Copyright (c) 2019, Blue Brain Project
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
@@ -26,22 +26,38 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
 THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef output_spikes_h
-#define output_spikes_h
+#ifndef fast_imem_h
+#define fast_imem_h
 
-#include <vector>
-#include <utility>
+#include "coreneuron/nrnoc/multicore.h"
+
 namespace coreneuron {
-void output_spikes(const char* outpath);
-void mk_spikevec_buffer(int);
 
-extern std::vector<double> spikevec_time;
-extern std::vector<int> spikevec_gid;
+/* Bool global variable to define if the fast_imem
+ * calculations should be enabled.
+ */
+extern bool nrn_use_fast_imem;
 
-void clear_spike_vectors();
-void validation(std::vector<std::pair<double, int> >& res);
+/* Free memory allocated for the fast current membrane calculation.
+ * Found in src/nrnoc/multicore.c in NEURON.
+ */
+void fast_imem_free();
 
-void spikevec_lock();
-void spikevec_unlock();
+/* Allocate memory for the rhs and d arrays needed for the fast
+ * current membrane calculation.
+ * Found in src/nrnoc/multicore.c in NEURON.
+ */
+static void fast_imem_alloc();
+
+/* fast_imem_alloc() wrapper.
+ * Found in src/nrnoc/multicore.c in NEURON.
+ */
+void nrn_fast_imem_alloc();
+
+/* Calculate the new values of rhs array at every timestep.
+ * Found in src/nrnoc/fadvance.c in NEURON.
+ */
+void nrn_calc_fast_imem(NrnThread* _nt);
+
 }  // namespace coreneuron
-#endif
+#endif //fast_imem_h
