@@ -34,6 +34,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include "coreneuron/nrnconf.h"
 #include "coreneuron/nrnoc/multicore.h"
 #include "coreneuron/nrniv/nrniv_decl.h"
+#include "coreneuron/nrnoc/fast_imem.h"
 #include "coreneuron/nrnoc/nrnoc_decl.h"
 #include "coreneuron/nrniv/vrecitem.h"
 #include "coreneuron/nrniv/multisend.h"
@@ -50,6 +51,8 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include "coreneuron/utils/reports/nrnsection_mapping.h"
 
 // callbacks into nrn/src/nrniv/nrnbbcore_write.cpp
+#include "coreneuron/nrnoc/fast_imem.h"
+#include "coreneuron/nrniv/nrniv_decl.h"
 #include "coreneuron/nrniv/nrn2core_direct.h"
 
 int corenrn_embedded;
@@ -127,6 +130,20 @@ int (*nrn2core_get_dat2_vecplay_inst_)(int tid,
                                        int& sz,
                                        double*& yvec,
                                        double*& tvec);
+
+void (*nrn2core_get_trajectory_requests_)(int tid,
+                                          int& bsize,
+                                          int& n_pr,
+                                          void**& vpr,
+                                          int& n_trajec,
+                                          int*& types,
+                                          int*& indices,
+                                          double**& pvars,
+                                          double**& varrays);
+
+void (*nrn2core_trajectory_values_)(int tid, int n_pr, void** vpr, double t);
+
+void (*nrn2core_trajectory_return_)(int tid, int n_pr, int vecsz, void** vpr, double t);
 
 // file format defined in cooperation with nrncore/src/nrniv/nrnbbcore_write.cpp
 // single integers are ascii one per line. arrays are binary int or double
@@ -243,11 +260,6 @@ static int maxgid;
 // is a multiple of NRN_SOA_PAD doubles
 #define NRN_SOA_PAD 8
 #endif
-#if !defined(NRN_SOA_BYTE_ALIGN)
-// for layout 0, every range variable array must be aligned by at least 16 bytes (the size of the
-// simd memory bus)
-#define NRN_SOA_BYTE_ALIGN (8 * sizeof(double))
-#endif
 
 #ifdef _OPENMP
 static MUTDEC
@@ -312,7 +324,7 @@ void nrn_read_filesdat(int& ngrp, int*& grp, int multiple, int*& imult, const ch
     }
 
     char version[256];
-    fscanf(fp, "%s\n", version);
+    nrn_assert(fscanf(fp, "%s\n", version) == 1);
     check_bbcore_write_version(version);
 
     int iNumFiles = 0;
@@ -350,8 +362,8 @@ void nrn_read_filesdat(int& ngrp, int*& grp, int multiple, int*& imult, const ch
         if ((iNum + 1) % iNumFiles == 0) {
             // re-read file for each multiple (skipping the two header lines)
             rewind(fp);
-            fscanf(fp, "%*s\n");
-            fscanf(fp, "%*d\n");
+            nrn_assert(fscanf(fp, "%*s\n") == 0);
+            nrn_assert(fscanf(fp, "%*d\n") == 0);
         }
     }
 
@@ -398,7 +410,7 @@ static void read_phase1(int* output_gid, int imult, NrnThread& nt) {
 
     nt.presyns = new PreSyn[nt.n_presyn];
     nt.netcons = new NetCon[nt.n_netcon + nrn_setup_extracon];
-    nt.presyns_helper = (PreSynHelper*)ecalloc(nt.n_presyn, sizeof(PreSynHelper));
+    nt.presyns_helper = (PreSynHelper*)ecalloc_align(nt.n_presyn, sizeof(PreSynHelper));
 
     int* nc_srcgid = netcon_srcgid[nt.id];
     for (int i = 0; i < nt.n_netcon; ++i) {
@@ -681,7 +693,9 @@ void nrn_setup(const char* filesdat,
     maxgid = 0x7fffffff / nrn_setup_multiple;
     nrn_read_filesdat(ngroup, gidgroups, nrn_setup_multiple, imult, filesdat);
 
-    MUTCONSTRUCT(1)
+    if (!MUTCONSTRUCTED) {
+        MUTCONSTRUCT(1)
+    }
     // temporary bug work around. If any process has multiple threads, no
     // process can have a single thread. So, for now, if one thread, make two.
     // Fortunately, empty threads work fine.
@@ -784,6 +798,9 @@ void nrn_setup(const char* filesdat,
     mk_cell_indices();
 #endif
 
+    /// Allocate memory for fast_imem calculation
+    nrn_fast_imem_alloc();
+
     /// Generally, tables depend on a few parameters. And if those parameters change,
     /// then the table needs to be recomputed. This is obviously important in NEURON
     /// since the user can change those parameters at any time. However, there is no
@@ -796,6 +813,7 @@ void nrn_setup(const char* filesdat,
 
     model_size();
     delete[] gidgroups;
+    delete[] imult;
 
     if (nrnmpi_myid == 0) {
         printf(" Setup Done   : %.2lf seconds \n", nrn_wtime() - time);
@@ -807,7 +825,7 @@ void setup_ThreadData(NrnThread& nt) {
         Memb_func& mf = memb_func[tml->index];
         Memb_list* ml = tml->ml;
         if (mf.thread_size_) {
-            ml->_thread = (ThreadDatum*)ecalloc(mf.thread_size_, sizeof(ThreadDatum));
+            ml->_thread = (ThreadDatum*)ecalloc_align(mf.thread_size_, sizeof(ThreadDatum));
             if (mf.thread_mem_init_) {
                 MUTLOCK (*mf.thread_mem_init_)(ml->_thread);
                 MUTUNLOCK
@@ -900,6 +918,45 @@ int nrn_i_layout(int icnt, int cnt, int isz, int sz, int layout) {
     return 0;
 }
 
+// This function is related to nrn_dblpntr2nrncore in Neuron to determine which values should
+// be transferred from CoreNeuron. Types correspond to the value to be transferred based on
+// mech_type enum or non-artificial cell mechanisms.
+// take into account alignment, layout, permutation
+// only voltage, i_membrane_ or mechanism data index allowed. (mtype 0 means time)
+double* stdindex2ptr(int mtype, int index, NrnThread& nt) {
+    if (mtype == voltage) {  // voltage
+        int v0 = nt._actual_v - nt._data;
+        int ix = index;  // relative to _actual_v
+        nrn_assert((ix >= 0) && (ix < nt.end));
+        if (nt._permute) {
+            node_permute(&ix, 1, nt._permute);
+        }
+        return nt._data + (v0 + ix);                // relative to nt._data
+    } else if (mtype == i_membrane_) {              // membrane current from fast_imem calculation
+            int i_mem = nt.nrn_fast_imem->nrn_sav_rhs - nt._data;
+            int ix = index;  // relative to nrn_fast_imem->nrn_sav_rhs
+            nrn_assert((ix >= 0) && (ix < nt.end));
+            if (nt._permute) {
+                node_permute(&ix, 1, nt._permute);
+            }
+            return nt._data + (i_mem + ix);         // relative to nt._data
+    } else if (mtype > 0 && mtype < n_memb_func) {  //
+        Memb_list* ml = nt._ml_list[mtype];
+        nrn_assert(ml);
+        int ix = nrn_param_layout(index, mtype, ml);
+        if (ml->_permute) {
+            ix = nrn_index_permute(ix, mtype, ml);
+        }
+        return ml->data + ix;
+    } else if (mtype == 0) {  // time
+        return &nt._t;
+    } else {
+        printf("stdindex2ptr does not handle mtype=%d\n", mtype);
+        nrn_assert(0);
+    }
+    return NULL;
+}
+
 // from i to (icnt, isz)
 void nrn_inverse_i_layout(int i, int& icnt, int cnt, int& isz, int sz, int layout) {
     if (layout == 1) {
@@ -948,8 +1005,15 @@ inline void mech_layout(FileHandler& F, T* data, int cnt, int sz, int layout) {
  * things up first. */
 
 void nrn_cleanup(bool clean_ion_global_map) {
+    clear_event_queue();  // delete left-over TQItem
     gid2in.clear();
     gid2out.clear();
+
+    // clean nrnthread_chkpnt
+    if (nrnthread_chkpnt) {
+        delete[] nrnthread_chkpnt;
+        nrnthread_chkpnt = nullptr;
+    }
 
     // clean ezOpt parser allocated memory (if any)
     nrnopt_delete();
@@ -957,8 +1021,8 @@ void nrn_cleanup(bool clean_ion_global_map) {
     // clean ions global maps
     if (clean_ion_global_map) {
         for (int i = 0; i < nrn_ion_global_map_size; i++)
-            free(nrn_ion_global_map[i]);
-        free(nrn_ion_global_map);
+            free_memory(nrn_ion_global_map[i]);
+        free_memory(nrn_ion_global_map);
         nrn_ion_global_map = NULL;
         nrn_ion_global_map_size = 0;
     }
@@ -967,13 +1031,14 @@ void nrn_cleanup(bool clean_ion_global_map) {
     for (int it = 0; it < nrn_nthread; ++it) {
         NrnThread* nt = nrn_threads + it;
         NrnThreadMembList* next_tml = NULL;
+        delete_trajectory_requests(*nt);
         for (NrnThreadMembList* tml = nt->tml; tml; tml = next_tml) {
             Memb_list* ml = tml->ml;
 
             ml->data = NULL;  // this was pointing into memory owned by nt
-            free(ml->pdata);
+            free_memory(ml->pdata);
             ml->pdata = NULL;
-            free(ml->nodeindices);
+            free_memory(ml->nodeindices);
             ml->nodeindices = NULL;
             if (ml->_permute) {
                 delete[] ml->_permute;
@@ -981,42 +1046,42 @@ void nrn_cleanup(bool clean_ion_global_map) {
             }
 
             if (ml->_thread) {
-                free(ml->_thread);
+                free_memory(ml->_thread);
                 ml->_thread = NULL;
             }
 
             NetReceiveBuffer_t* nrb = ml->_net_receive_buffer;
             if (nrb) {
                 if (nrb->_size) {
-                    free(nrb->_pnt_index);
-                    free(nrb->_weight_index);
-                    free(nrb->_nrb_t);
-                    free(nrb->_nrb_flag);
-                    free(nrb->_displ);
-                    free(nrb->_nrb_index);
+                    free_memory(nrb->_pnt_index);
+                    free_memory(nrb->_weight_index);
+                    free_memory(nrb->_nrb_t);
+                    free_memory(nrb->_nrb_flag);
+                    free_memory(nrb->_displ);
+                    free_memory(nrb->_nrb_index);
                 }
-                free(nrb);
+                free_memory(nrb);
             }
 
             NetSendBuffer_t* nsb = ml->_net_send_buffer;
             if (nsb) {
                 if (nsb->_size) {
-                    free(nsb->_sendtype);
-                    free(nsb->_vdata_index);
-                    free(nsb->_pnt_index);
-                    free(nsb->_weight_index);
-                    free(nsb->_nsb_t);
-                    free(nsb->_nsb_flag);
+                    free_memory(nsb->_sendtype);
+                    free_memory(nsb->_vdata_index);
+                    free_memory(nsb->_pnt_index);
+                    free_memory(nsb->_weight_index);
+                    free_memory(nsb->_nsb_t);
+                    free_memory(nsb->_nsb_flag);
                 }
-                free(nsb);
+                free_memory(nsb);
             }
 
             if (tml->dependencies)
                 free(tml->dependencies);
 
             next_tml = tml->next;
-            free(tml->ml);
-            free(tml);
+            free_memory(tml->ml);
+            free_memory(tml);
         }
 
         nt->_actual_rhs = NULL;
@@ -1024,16 +1089,16 @@ void nrn_cleanup(bool clean_ion_global_map) {
         nt->_actual_a = NULL;
         nt->_actual_b = NULL;
 
-        free(nt->_v_parent_index);
+        free_memory(nt->_v_parent_index);
         nt->_v_parent_index = NULL;
 
-        free(nt->_data);
+        free_memory(nt->_data);
         nt->_data = NULL;
 
         free(nt->_idata);
         nt->_idata = NULL;
 
-        free(nt->_vdata);
+        free_memory(nt->_vdata);
         nt->_vdata = NULL;
 
         if (nt->_permute) {
@@ -1042,12 +1107,12 @@ void nrn_cleanup(bool clean_ion_global_map) {
         }
 
         if (nt->presyns_helper) {
-            free(nt->presyns_helper);
+            free_memory(nt->presyns_helper);
             nt->presyns_helper = NULL;
         }
 
         if (nt->pntprocs) {
-            delete[] nt->pntprocs;
+            free_memory(nt->pntprocs);
             nt->pntprocs = NULL;
         }
 
@@ -1062,7 +1127,7 @@ void nrn_cleanup(bool clean_ion_global_map) {
                     free(nt->pnt2presyn_ix[i]);
                 }
             }
-            free(nt->pnt2presyn_ix);
+            free_memory(nt->pnt2presyn_ix);
         }
 
         if (nt->netcons) {
@@ -1071,22 +1136,22 @@ void nrn_cleanup(bool clean_ion_global_map) {
         }
 
         if (nt->weights) {
-            delete[] nt->weights;
+            free_memory(nt->weights);
             nt->weights = NULL;
         }
 
         if (nt->_shadow_rhs) {
-            free(nt->_shadow_rhs);
+            free_memory(nt->_shadow_rhs);
             nt->_shadow_rhs = NULL;
         }
 
         if (nt->_shadow_d) {
-            free(nt->_shadow_d);
+            free_memory(nt->_shadow_d);
             nt->_shadow_d = NULL;
         }
 
         if (nt->_net_send_buffer_size) {
-            free(nt->_net_send_buffer);
+            free_memory(nt->_net_send_buffer);
             nt->_net_send_buffer = NULL;
             nt->_net_send_buffer_size = 0;
         }
@@ -1101,7 +1166,11 @@ void nrn_cleanup(bool clean_ion_global_map) {
             delete ((NrnThreadMappingInfo*)nt->mapping);
         }
 
-        free(nt->_ml_list);
+        free_memory(nt->_ml_list);
+
+        if (nt->nrn_fast_imem) {
+            fast_imem_free();
+        }
     }
 
 #if NRN_MULTISEND
@@ -1114,6 +1183,25 @@ void nrn_cleanup(bool clean_ion_global_map) {
 
     if (pnttype2presyn) {
         free(pnttype2presyn);
+        pnttype2presyn = NULL;
+    }
+}
+
+void delete_trajectory_requests(NrnThread& nt) {
+    if (nt.trajec_requests) {
+        TrajectoryRequests* tr = nt.trajec_requests;
+        if (tr->n_trajec) {
+            delete[] tr->vpr;
+            if (tr->scatter) {
+                delete[] tr->scatter;
+            }
+            if (tr->varrays) {
+                delete[] tr->varrays;
+            }
+            delete[] tr->gather;
+        }
+        delete nt.trajec_requests;
+        nt.trajec_requests = NULL;
     }
 }
 
@@ -1178,14 +1266,16 @@ void read_phase2(FileHandler& F, int imult, NrnThread& nt) {
     ntc.n_outputgids = n_outputgid;
     ntc.nmech = nmech;
 #endif
-    nrn_assert(n_outputgid > 0);  // avoid n_outputgid unused warning
+    if (!direct) {
+        nrn_assert(n_outputgid > 0);  // avoid n_outputgid unused warning
+    }
 
     /// Checkpoint in coreneuron is defined for both phase 1 and phase 2 since they are written
     /// together
     // printf("ncell=%d end=%d nmech=%d\n", nt.ncell, nt.end, nmech);
     // printf("nart=%d\n", nart);
     NrnThreadMembList* tml_last = NULL;
-    nt._ml_list = (Memb_list**)ecalloc(n_memb_func, sizeof(Memb_list*));
+    nt._ml_list = (Memb_list**)ecalloc_align(n_memb_func, sizeof(Memb_list*));
 
 #if CHKPNTDEBUG
     ntc.mlmap = new Memb_list_chkpnt*[n_memb_func];
@@ -1210,8 +1300,8 @@ void read_phase2(FileHandler& F, int imult, NrnThread& nt) {
 #endif
 
     for (int i = 0; i < nmech; ++i) {
-        tml = (NrnThreadMembList*)emalloc(sizeof(NrnThreadMembList));
-        tml->ml = (Memb_list*)ecalloc(1, sizeof(Memb_list));
+        tml = (NrnThreadMembList*)emalloc_align(sizeof(NrnThreadMembList));
+        tml->ml = (Memb_list*)ecalloc_align(1, sizeof(Memb_list));
         tml->ml->_net_receive_buffer = NULL;
         tml->ml->_net_send_buffer = NULL;
         tml->ml->_permute = NULL;
@@ -1252,10 +1342,10 @@ void read_phase2(FileHandler& F, int imult, NrnThread& nt) {
     delete[] ml_nodecount;
 
     if (shadow_rhs_cnt) {
-        nt._shadow_rhs = (double*)ecalloc_align(nrn_soa_padded_size(shadow_rhs_cnt, 0),
-                                                NRN_SOA_BYTE_ALIGN, sizeof(double));
-        nt._shadow_d = (double*)ecalloc_align(nrn_soa_padded_size(shadow_rhs_cnt, 0),
-                                              NRN_SOA_BYTE_ALIGN, sizeof(double));
+        nt._shadow_rhs =
+            (double*)ecalloc_align(nrn_soa_padded_size(shadow_rhs_cnt, 0), sizeof(double));
+        nt._shadow_d =
+            (double*)ecalloc_align(nrn_soa_padded_size(shadow_rhs_cnt, 0), sizeof(double));
         nt.shadow_rhs_cnt = shadow_rhs_cnt;
     }
 
@@ -1269,7 +1359,7 @@ void read_phase2(FileHandler& F, int imult, NrnThread& nt) {
     // see patternstim.cpp
     int extra_nv = (&nt == nrn_threads) ? nrn_extra_thread0_vdata : 0;
     if (nt._nvdata + extra_nv)
-        nt._vdata = (void**)ecalloc(nt._nvdata + extra_nv, sizeof(void*));
+        nt._vdata = (void**)ecalloc_align(nt._nvdata + extra_nv, sizeof(void*));
     else
         nt._vdata = NULL;
     // printf("_nidata=%d _nvdata=%d\n", nt._nidata, nt._nvdata);
@@ -1302,14 +1392,15 @@ void read_phase2(FileHandler& F, int imult, NrnThread& nt) {
             npnt += n;
         }
     }
-    nt.pntprocs = new Point_process[npnt];  // includes acell with and without gid
+    nt.pntprocs = (Point_process*)ecalloc_align(
+        npnt, sizeof(Point_process));  // includes acell with and without gid
     nt.n_pntproc = npnt;
     // printf("offset=%ld\n", offset);
     nt._ndata = offset;
 
     // now that we know the effect of padding, we can allocate data space,
     // fill matrix, and adjust Memb_list data pointers
-    nt._data = (double*)ecalloc_align(nt._ndata, NRN_SOA_BYTE_ALIGN, sizeof(double));
+    nt._data = (double*)ecalloc_align(nt._ndata, sizeof(double));
     nt._actual_rhs = nt._data + 0 * ne;
     nt._actual_d = nt._data + 1 * ne;
     nt._actual_a = nt._data + 2 * ne;
@@ -1323,7 +1414,7 @@ void read_phase2(FileHandler& F, int imult, NrnThread& nt) {
     }
 
     // matrix info
-    nt._v_parent_index = (int*)ecalloc_align(nt.end, NRN_SOA_BYTE_ALIGN, sizeof(int));
+    nt._v_parent_index = (int*)ecalloc_align(nt.end, sizeof(int));
     if (direct) {
         (*nrn2core_get_dat2_2_)(nt.id, nt._v_parent_index, nt._actual_a, nt._actual_b,
                                 nt._actual_area, nt._actual_v, nt._actual_diam);
@@ -1362,13 +1453,12 @@ void read_phase2(FileHandler& F, int imult, NrnThread& nt) {
         int layout = nrn_mech_data_layout_[type];
 
         if (!is_art && !direct) {
-            ml->nodeindices = (int*)ecalloc_align(ml->nodecount, NRN_SOA_BYTE_ALIGN, sizeof(int));
+            ml->nodeindices = (int*)ecalloc_align(ml->nodecount, sizeof(int));
         } else {
             ml->nodeindices = NULL;
         }
         if (szdp) {
-            ml->pdata = (int*)ecalloc_align(nrn_soa_padded_size(n, layout) * szdp,
-                                            NRN_SOA_BYTE_ALIGN, sizeof(int));
+            ml->pdata = (int*)ecalloc_align(nrn_soa_padded_size(n, layout) * szdp, sizeof(int));
         }
 
         if (direct) {
@@ -1388,8 +1478,7 @@ void read_phase2(FileHandler& F, int imult, NrnThread& nt) {
             mech_layout<int>(F, ml->pdata, n, szdp, layout);
 #if CHKPNTDEBUG  // Not substantive. Only for debugging.
             Memb_list_ckpnt* mlc = ntc.mlmap[type];
-            mlc->pdata_not_permuted =
-                (int*)coreneuron::ecalloc_align(n * szdp, NRN_SOA_BYTE_ALIGN, sizeof(int));
+            mlc->pdata_not_permuted = (int*)coreneuron::ecalloc_align(n * szdp, sizeof(int));
             if (layout == 1) {  // AoS just copy
                 for (int i = 0; i < n; ++i) {
                     for (int j = 0; j < szdp; ++j) {
@@ -1757,7 +1846,7 @@ for (int i=0; i < nt.end; ++i) {
     // nt._net_send_buffer_size = nt.ncell/100 + 1;
     // but, to avoid reallocation complexity on GPU ...
     nt._net_send_buffer_size = nt.ncell;
-    nt._net_send_buffer = (int*)ecalloc(nt._net_send_buffer_size, sizeof(int));
+    nt._net_send_buffer = (int*)ecalloc_align(nt._net_send_buffer_size, sizeof(int));
 
     // do extracon later as the target and weight info
     // is not directly in the file
@@ -1832,7 +1921,7 @@ for (int i=0; i < nt.end; ++i) {
     // weights in netcons order in groups defined by Point_process target type.
     nt.n_weight += nrn_setup_extracon * extracon_target_nweight;
     if (!direct) {
-        nt.weights = new double[nt.n_weight];
+        nt.weights = (double*)ecalloc_align(nt.n_weight, sizeof(double));
         F.read_array<double>(nt.weights, nweight);
     }
 
@@ -2019,13 +2108,15 @@ for (int i=0; i < nt.end; ++i) {
             checkpoint_restore_tqueue(nt, F);
         }
     }
+
     // NetReceiveBuffering
     for (int i = 0; i < net_buf_receive_cnt_; ++i) {
         int type = net_buf_receive_type_[i];
         // Does this thread have this type.
         Memb_list* ml = nt._ml_list[type];
         if (ml) {  // needs a NetReceiveBuffer
-            NetReceiveBuffer_t* nrb = (NetReceiveBuffer_t*)ecalloc(1, sizeof(NetReceiveBuffer_t));
+            NetReceiveBuffer_t* nrb =
+                (NetReceiveBuffer_t*)ecalloc_align(1, sizeof(NetReceiveBuffer_t));
             ml->_net_receive_buffer = nrb;
             nrb->_pnt_offset = pnt_offset[type];
 
@@ -2040,12 +2131,12 @@ for (int i=0; i < nt.end; ++i) {
                 nrb->_size = ml->nodecount;
             }
 
-            nrb->_pnt_index = (int*)ecalloc(nrb->_size, sizeof(int));
-            nrb->_displ = (int*)ecalloc(nrb->_size + 1, sizeof(int));
-            nrb->_nrb_index = (int*)ecalloc(nrb->_size, sizeof(int));
-            nrb->_weight_index = (int*)ecalloc(nrb->_size, sizeof(int));
-            nrb->_nrb_t = (double*)ecalloc(nrb->_size, sizeof(double));
-            nrb->_nrb_flag = (double*)ecalloc(nrb->_size, sizeof(double));
+            nrb->_pnt_index = (int*)ecalloc_align(nrb->_size, sizeof(int));
+            nrb->_displ = (int*)ecalloc_align(nrb->_size + 1, sizeof(int));
+            nrb->_nrb_index = (int*)ecalloc_align(nrb->_size, sizeof(int));
+            nrb->_weight_index = (int*)ecalloc_align(nrb->_size, sizeof(int));
+            nrb->_nrb_t = (double*)ecalloc_align(nrb->_size, sizeof(double));
+            nrb->_nrb_flag = (double*)ecalloc_align(nrb->_size, sizeof(double));
         }
     }
 
@@ -2055,7 +2146,7 @@ for (int i=0; i < nt.end; ++i) {
         // Does this thread have this type.
         Memb_list* ml = nt._ml_list[type];
         if (ml) {  // needs a NetSendBuffer
-            NetSendBuffer_t* nsb = (NetSendBuffer_t*)ecalloc(1, sizeof(NetSendBuffer_t));
+            NetSendBuffer_t* nsb = (NetSendBuffer_t*)ecalloc_align(1, sizeof(NetSendBuffer_t));
             ml->_net_send_buffer = nsb;
 
             // begin with a size equal to twice number of instances
@@ -2063,15 +2154,15 @@ for (int i=0; i < nt.end; ++i) {
             nsb->_size = ml->nodecount * 2;
             nsb->_cnt = 0;
 
-            nsb->_sendtype = (int*)ecalloc(nsb->_size, sizeof(int));
-            nsb->_vdata_index = (int*)ecalloc(nsb->_size, sizeof(int));
-            nsb->_pnt_index = (int*)ecalloc(nsb->_size, sizeof(int));
-            nsb->_weight_index = (int*)ecalloc(nsb->_size, sizeof(int));
+            nsb->_sendtype = (int*)ecalloc_align(nsb->_size, sizeof(int));
+            nsb->_vdata_index = (int*)ecalloc_align(nsb->_size, sizeof(int));
+            nsb->_pnt_index = (int*)ecalloc_align(nsb->_size, sizeof(int));
+            nsb->_weight_index = (int*)ecalloc_align(nsb->_size, sizeof(int));
             // when == 1, NetReceiveBuffer_t is newly allocated (i.e. we need to free previous copy
             // and recopy new data
             nsb->reallocated = 1;
-            nsb->_nsb_t = (double*)ecalloc(nsb->_size, sizeof(double));
-            nsb->_nsb_flag = (double*)ecalloc(nsb->_size, sizeof(double));
+            nsb->_nsb_t = (double*)ecalloc_align(nsb->_size, sizeof(double));
+            nsb->_nsb_flag = (double*)ecalloc_align(nsb->_size, sizeof(double));
         }
     }
 

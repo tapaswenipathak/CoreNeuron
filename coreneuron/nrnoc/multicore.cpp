@@ -32,6 +32,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include "coreneuron/nrnoc/multicore.h"
 #include "coreneuron/nrnmpi/nrnmpi.h"
 #include "coreneuron/nrnoc/nrnoc_decl.h"
+#include "coreneuron/nrniv/memory.h"
 /*
 Now that threads have taken over the actual_v, v_node, etc, it might
 be a good time to regularize the method of freeing, allocating, and
@@ -66,8 +67,6 @@ the handling of v_structure_change as long as possible.
 */
 
 namespace coreneuron {
-#define CACHELINE_ALLOC(name, type, size) \
-    name = (type*)nrn_cacheline_alloc((void**)&name, size * sizeof(type))
 
 int nrn_nthread = 0;
 NrnThread* nrn_threads = NULL;
@@ -88,7 +87,7 @@ void nrn_threads_create(int n) {
         nrn_threads = (NrnThread*)0;
         nrn_nthread = n;
         if (n > 0) {
-            CACHELINE_ALLOC(nrn_threads, NrnThread, n);
+            nrn_threads = (NrnThread*)emalloc_align(n * sizeof(NrnThread));
 
             for (i = 0; i < n; ++i) {
                 nt = nrn_threads + i;
@@ -137,6 +136,9 @@ void nrn_threads_create(int n) {
                 nt->_net_send_buffer_cnt = 0;
                 nt->_watch_types = NULL;
                 nt->mapping = NULL;
+                nt->trajec_requests = NULL;
+
+                nt->nrn_fast_imem = nullptr;
             }
         }
         v_structure_change = 1;
@@ -147,7 +149,7 @@ void nrn_threads_create(int n) {
 
 void nrn_threads_free() {
     if (nrn_nthread) {
-        free((void*)nrn_threads);
+        free_memory((void*)nrn_threads);
         nrn_threads = 0;
         nrn_nthread = 0;
     }

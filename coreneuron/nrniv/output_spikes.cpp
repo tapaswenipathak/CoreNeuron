@@ -40,6 +40,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 #include "coreneuron/nrniv/nrnmutdec.h"
 #include "coreneuron/nrnmpi/nrnmpi_impl.h"
 #include "coreneuron/nrnmpi/nrnmpidec.h"
+#include "coreneuron/utils/string_utils.h"
 
 namespace coreneuron {
 std::vector<double> spikevec_time;
@@ -57,7 +58,9 @@ static MUTDEC
     } catch (const std::length_error& le) {
         std::cerr << "Lenght error" << le.what() << std::endl;
     }
-    MUTCONSTRUCT(1);
+    if (!MUTCONSTRUCTED) {
+        MUTCONSTRUCT(1);
+    }
 }
 
 void spikevec_lock() {
@@ -93,8 +96,12 @@ void local_spikevec_sort(std::vector<double>& isvect,
 #if NRNMPI
 
 void sort_spikes(std::vector<double>& spikevec_time, std::vector<int>& spikevec_gid) {
-    double lmin_time = *(std::min_element(spikevec_time.begin(), spikevec_time.end()));
-    double lmax_time = *(std::max_element(spikevec_time.begin(), spikevec_time.end()));
+    double lmin_time = std::numeric_limits<double>::max();
+    double lmax_time = std::numeric_limits<double>::min();
+    if (!spikevec_time.empty()) {
+        lmin_time = *(std::min_element(spikevec_time.begin(), spikevec_time.end()));
+        lmax_time = *(std::max_element(spikevec_time.begin(), spikevec_time.end()));
+    }
     double min_time = nrnmpi_dbl_allmin(lmin_time);
     double max_time = nrnmpi_dbl_allmax(lmax_time);
 
@@ -170,9 +177,10 @@ void output_spikes_parallel(const char* outpath) {
 
     // populate buffer with all spike entries
     char spike_entry[SPIKE_RECORD_LEN];
+    unsigned spike_data_offset = 0;
     for (unsigned i = 0; i < num_spikes; i++) {
-        snprintf(spike_entry, 64, "%.8g\t%d\n", spikevec_time[i], spikevec_gid[i]);
-        strcat(spike_data, spike_entry);
+        int spike_entry_chars = snprintf(spike_entry, 64, "%.8g\t%d\n", spikevec_time[i], spikevec_gid[i]);
+        spike_data_offset = strcat_at_pos(spike_data, spike_data_offset, spike_entry, spike_entry_chars);
     }
 
     // calculate offset into global file. note that we don't write
@@ -242,6 +250,15 @@ void output_spikes(const char* outpath) {
 #else
     output_spikes_serial(outpath);
 #endif
+}
+
+void clear_spike_vectors() {
+    auto spikevec_time_capacity = spikevec_time.capacity();
+    auto spikevec_gid_capacity = spikevec_gid.capacity();
+    spikevec_time.clear();
+    spikevec_gid.clear();
+    spikevec_time.reserve(spikevec_time_capacity);
+    spikevec_gid.reserve(spikevec_gid_capacity);
 }
 
 void validation(std::vector<std::pair<double, int> >& res) {
